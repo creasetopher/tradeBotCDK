@@ -1,5 +1,9 @@
+# Chris's tradebot.
 
-# Welcome to your CDK Python project!
+This is Chris's tradebot. Don't mind the text below, it is simply a template from AWS Python CDK.
+
+
+## Welcome to your CDK Python project!
 
 This is a blank project for CDK development with Python.
 
