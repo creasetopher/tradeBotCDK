@@ -8,8 +8,8 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 from pydantic import BaseModel
-
 import boto3
+from tradebot.events.candidate import CandidateSnapshotEvent
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
