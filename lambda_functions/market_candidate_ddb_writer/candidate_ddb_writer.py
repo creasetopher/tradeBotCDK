@@ -23,7 +23,8 @@ UNIVERSE_ID = os.environ.get("UNIVERSE_ID", "default_universe")
 CANDIDATE_TTL_DAYS = int(os.environ.get("CANDIDATE_TTL_DAYS", "14"))
 ACTIVE_CANDIDATE_TTL_SECONDS = int(os.environ.get("ACTIVE_CANDIDATE_TTL_SECONDS", "900"))
 
-# triggered by SNS topic, writes candidate records to DynamoDB with TTL for later processing by market data worker
+# Triggered by SQS messages subscribed to the candidate SNS topic.
+# Then writes candidate records to DynamoDB with TTL for later processing by market data worker
 def handler(event: dict[str, Any], context: Any) -> dict[str, list[dict[str, str]]]:
     failures: list[dict[str, str]] = []
 
@@ -37,7 +38,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, list[dict[str, str
 
             candidate_history_table.put_item(Item=candidate_history_item)
             _conditional_put_active_candidate_item(active_candidate_item)
-            
+
             # leaving this here for reference, but the conditional put function handles this logic now
             # active_candidates_table.put_item(Item=active_candidate_item)
 

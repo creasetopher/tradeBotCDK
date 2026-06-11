@@ -127,7 +127,7 @@ def _candidate_from_quote(quote: dict[str, Any], screen: str, as_of: str) -> dic
         "ask": _string_decimal(quote.get("ask")),
         "short_name": quote.get("shortName"),
         "analyst_rating": quote.get("averageAnalystRating"),
-        "source_payload_ts_ms": int(time.time() * 1000),
+        "scanner_ts_ms": int(time.time() * 1000),
     }
 
 
