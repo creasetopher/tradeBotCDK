@@ -17,8 +17,7 @@ logger.setLevel(logging.INFO)
 
 sns_client = boto3.client("sns")
 
-# CANDIDATE_TOPIC_ARN = os.environ["CANDIDATE_TOPIC_ARN"]
-CANDIDATE_TOPIC_ARN = "CANDIDATE_TOPIC_ARN"
+CANDIDATE_TOPIC_ARN = os.environ["CANDIDATE_TOPIC_ARN"]
 DEFAULT_SCREENS = [
     YF_PREDEFINED_SCREENER_QUERIES.SMALL_CAP_GAINERS, 
     YF_PREDEFINED_SCREENER_QUERIES.DAY_GAINERS, 
@@ -67,17 +66,9 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     for candidate in candidates_by_symbol.values():
         event = CandidateSnapshotEvent.from_candidate(candidate)
 
-        # payload = {
-        #     "event_type": EVENT_TYPE,
-        #     "schema_version": SCHEMA_VERSION,
-        #     "event_id": _build_candidate_event_id(candidate),
-        #     "source": SOURCE,
-        #     "update_time": update_time,
-        #     "candidate": candidate,
-        # }
         sns_client.publish(
             TopicArn=CANDIDATE_TOPIC_ARN,
-            Message=json.dumps(payload, separators=(",", ":")),
+            Message=event.model_dump_json(exclude_none=True),
             MessageAttributes={
                 "event_type": {
                     "DataType": "String",

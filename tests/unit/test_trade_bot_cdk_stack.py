@@ -1,16 +1,41 @@
-import aws_cdk as core
-import aws_cdk.assertions as assertions
+import aws_cdk as cdk
+from aws_cdk import assertions
 
 from trade_bot_cdk.trade_bot_cdk_stack import TradeBotCdkStack
 
-# example tests. To run these tests, uncomment this file along with the example
-# resource in trade_bot_cdk/trade_bot_cdk_stack.py
-def test_sqs_queue_created():
-    return
-    # app = core.App()
-    # stack = TradeBotCdkStack(app, "trade-bot-cdk")
-    # template = assertions.Template.from_stack(stack)
 
-#     template.has_resource_properties("AWS::SQS::Queue", {
-#         "VisibilityTimeout": 300
-#     })
+def test_active_candidates_table_created():
+    app = cdk.App()
+    stack = TradeBotCdkStack(app, "TestStack", stage="test")
+    template = assertions.Template.from_stack(stack)
+
+    template.has_resource_properties(
+        "AWS::DynamoDB::Table",
+        {
+            "KeySchema": assertions.Match.array_with(
+                [
+                    {
+                        "AttributeName": "universe_id",
+                        "KeyType": "HASH",
+                    },
+                    {
+                        "AttributeName": "symbol",
+                        "KeyType": "RANGE",
+                    },
+                ]
+            )
+        },
+    )
+
+
+def test_candidate_writer_uses_expected_handler():
+    app = cdk.App()
+    stack = TradeBotCdkStack(app, "TestStack", stage="test")
+    template = assertions.Template.from_stack(stack)
+
+    template.has_resource_properties(
+        "AWS::Lambda::Function",
+        {
+            "Handler": "candidate_ddb_writer.handler",
+        },
+    )

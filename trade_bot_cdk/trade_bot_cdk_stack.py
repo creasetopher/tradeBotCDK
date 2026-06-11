@@ -222,13 +222,16 @@ class TradeBotCdkStack(Stack):
             function_name=f"{prefix}-candidate-writer",
             runtime=_lambda.Runtime.PYTHON_3_12,
             architecture=_lambda.Architecture.ARM_64,
-            handler="candidate_ddb_writer_handler.handler",
-            code=_lambda.Code.from_asset("lambda_functions/market_candidate_ddb_writer"),
+            handler="candidate_ddb_writer.handler",
+            code=self._bundled_python_lambda_code(
+                "lambda_functions/market_candidate_ddb_writer"
+            ),
             memory_size=256,
             timeout=Duration.seconds(60),
             log_retention=logs.RetentionDays.ONE_MONTH,
             environment={
                 "CANDIDATES_TABLE_NAME": candidates_table.table_name,
+                "UNIVERSE_ID": "default",
                 "CANDIDATE_TTL_DAYS": "14",
                 "ACTIVE_CANDIDATES_TABLE_NAME": active_candidates_table.table_name,
                 "ACTIVE_CANDIDATE_TTL_SECONDS": "900",
@@ -378,7 +381,8 @@ class TradeBotCdkStack(Stack):
             ),
             environment={
                 "MARKET_EVENT_STREAM_NAME": market_event_stream.stream_name,
-                "CANDIDATES_TABLE_NAME": candidates_table.table_name,
+                "ACTIVE_CANDIDATES_TABLE_NAME": active_candidates_table.table_name,
+                "UNIVERSE_ID": "default",
                 "TRADING_ENABLED_PARAM": trading_enabled_param.parameter_name,
                 "KILL_SWITCH_PARAM": kill_switch_param.parameter_name,
                 "STAGE": stage,

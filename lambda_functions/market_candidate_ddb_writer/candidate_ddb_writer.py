@@ -9,6 +9,7 @@ from decimal import Decimal
 from typing import Any
 from pydantic import BaseModel
 import boto3
+from botocore.exceptions import ClientError
 from tradebot.events.candidate import CandidateSnapshotEvent
 
 logger = logging.getLogger()
@@ -35,7 +36,10 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, list[dict[str, str
             active_candidate_item = _active_candidate_item(candidate_event)
 
             candidate_history_table.put_item(Item=candidate_history_item)
-            active_candidates_table.put_item(Item=active_candidate_item)
+            _conditional_put_active_candidate_item(active_candidate_item)
+            
+            # leaving this here for reference, but the conditional put function handles this logic now
+            # active_candidates_table.put_item(Item=active_candidate_item)
 
         except Exception:
             logger.exception("Failed to process candidate record")
@@ -100,11 +104,32 @@ def _active_candidate_item(event: CandidateSnapshotEvent) -> dict[str, Any]:
 
     return _to_dynamodb_item(item)
 
+def _conditional_put_active_candidate_item(item: dict[str, Any]) -> None:
+    condition_expression = "attribute_not_exists(last_seen_update_time) OR last_seen_update_time <= :update_time"
+    CONDITIONAL_EXP_FAILED_RESPONSE = "ConditionalCheckFailedException"
+    try:
+        active_candidates_table.put_item(
+            Item=item,
+            ConditionExpression=condition_expression,
+            ExpressionAttributeValues={
+                ":update_time": item["last_seen_update_time"],
+            },
+        )
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] == CONDITIONAL_EXP_FAILED_RESPONSE:
+            logger.info(
+                "Skipping stale active candidate update for symbol=%s update_time=%s",
+                item["symbol"],
+                item["last_seen_update_time"],
+            )
+            return
+
+        raise
 
 # helper function to recursively convert values to DynamoDB-compatible formats
 def _to_dynamodb_item(value: Any) -> Any:
     if isinstance(value, BaseModel):
-        return _to_dynamodb_value(value.model_dump(mode="python", exclude_none=True))
+        return _to_dynamodb_item(value.model_dump(mode="python", exclude_none=True))
 
     if isinstance(value, datetime):
         return value.astimezone(timezone.utc).isoformat()
@@ -118,12 +143,12 @@ def _to_dynamodb_item(value: Any) -> Any:
 
     if isinstance(value, dict):
         return {
-            str(k): _to_dynamodb_value(v)
+            str(k): _to_dynamodb_item(v)
             for k, v in value.items()
             if v is not None
         }
 
     if isinstance(value, list):
-        return [_to_dynamodb_value(v) for v in value]
+        return [_to_dynamodb_item(v) for v in value]
 
     return value
