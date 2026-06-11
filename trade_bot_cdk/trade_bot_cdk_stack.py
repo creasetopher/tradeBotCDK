@@ -390,7 +390,6 @@ class TradeBotCdkStack(Stack):
         )
 
         market_event_stream.grant_write(task_definition.task_role)
-        candidates_table.grant_read_data(task_definition.task_role)
         active_candidates_table.grant_read_write_data(candidate_writer_function)
         active_candidates_table.grant_read_data(task_definition.task_role)
         bot_state_table.grant_read_write_data(task_definition.task_role)
