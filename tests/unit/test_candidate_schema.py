@@ -17,7 +17,7 @@ def test_candidate_snapshot_event_parses_scanner_payload():
         "ask": "4.61",
         "short_name": "Virgin Galactic Holdings, Inc.",
         "analyst_rating": None,
-        "source_payload_ts_ms": 1781035759950,
+        "scanner_ts_ms": 1781035759950,
     }
 
     snapshot = CandidateSnapshot.model_validate(candidate)
