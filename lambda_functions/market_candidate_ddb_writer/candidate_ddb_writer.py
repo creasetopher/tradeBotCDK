@@ -26,6 +26,7 @@ ACTIVE_CANDIDATE_TTL_SECONDS = int(os.environ.get("ACTIVE_CANDIDATE_TTL_SECONDS"
 # Triggered by SQS messages subscribed to the candidate SNS topic.
 # Then writes candidate records to DynamoDB with TTL for later processing by market data worker
 def handler(event: dict[str, Any], context: Any) -> dict[str, list[dict[str, str]]]:
+    logger.info(f"Received incoming event: {json.dumps(event)}")
     failures: list[dict[str, str]] = []
 
     for record in event.get("Records", []):

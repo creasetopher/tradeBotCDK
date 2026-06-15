@@ -27,14 +27,12 @@ SCREENS = [s.strip() for s in os.environ.get("SCREENS", "").split(",") if s.stri
 MAX_SYMBOLS_PER_SCREEN = int(os.environ.get("MAX_SYMBOLS_PER_SCREEN", "100"))
 MIN_PRICE = Decimal(os.environ.get("MIN_PRICE", "1.00"))
 MIN_DOLLAR_VOLUME = Decimal(os.environ.get("MIN_DOLLAR_VOLUME", "1000000"))
-EVENT_TYPE = "candidate.snapshot.v1"
-SCHEMA_VERSION = "1.0.0"
-SOURCE = "yfinance(YAHOO_FINANCE)_predefined_screens"
 
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     update_time = datetime.now(timezone.utc).isoformat()
     candidates_by_symbol: dict[str, dict[str, Any]] = {}
 
+    logger.info("%d screens to run", len(SCREENS))
     for screen in SCREENS:
         logger.info("Running yfinance screen: %s", screen)
 
@@ -62,6 +60,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 existing_tags.update(candidate.get("scanner_tags", []))
                 candidates_by_symbol[symbol]["scanner_tags"] = sorted(existing_tags)
 
+    logger.info(f"The candidates: {dict(candidates_by_symbol)}")
     published = 0
     for candidate in candidates_by_symbol.values():
         event = CandidateSnapshotEvent.from_candidate(candidate)
@@ -139,25 +138,6 @@ def _passes_liquidity_filters(candidate: dict[str, Any]) -> bool:
     if price is None or dollar_volume is None:
         return False
     return price >= MIN_PRICE and dollar_volume >= MIN_DOLLAR_VOLUME
-
-def _build_candidate_event_id(candidate: dict[str, Any]) -> str:
-    """
-    Build a deterministic event ID based on candidate attributes for idempotency and deduplication purposes.
-    """
-    scanner_tags = ",".join(sorted(candidate.get("scanner_tags", [])))
-
-    raw = "|".join(
-        [
-            EVENT_TYPE,
-            SOURCE,
-            candidate["symbol"].upper(),
-            candidate["update_time"],
-            scanner_tags,
-        ]
-    )
-
-    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
-    return f"evt_{digest}"
 
 def _string_decimal(value: Any) -> str | None:
     value_as_decimal = _as_decimal(value)

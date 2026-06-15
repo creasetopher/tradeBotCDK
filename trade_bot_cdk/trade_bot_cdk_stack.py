@@ -5,6 +5,7 @@ from aws_cdk import (
     RemovalPolicy,
     Stack,
     TimeZone,
+    Tags,
     aws_dynamodb as dynamodb,
     aws_ec2 as ec2,
     aws_ecs as ecs,
@@ -164,10 +165,12 @@ class TradeBotCdkStack(Stack):
             retention_period=Duration.days(14),
         )
 
+        candidate_queue_name = f"{prefix}-candidate-updates"
+
         candidate_queue = sqs.Queue(
             self,
             "CandidateUpdatesQueue",
-            queue_name=f"{prefix}-candidate-updates",
+            queue_name=candidate_queue_name,
             enforce_ssl=True,
             receive_message_wait_time=Duration.seconds(10),
             retention_period=Duration.days(4),
@@ -184,6 +187,8 @@ class TradeBotCdkStack(Stack):
                 raw_message_delivery=True,
             )
         )
+
+        Tags.of(candidate_queue).add("name", candidate_queue_name)
 
 
         scanner_schedule_dlq = sqs.Queue(
