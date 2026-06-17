@@ -1,4 +1,5 @@
 from __future__ import annotations
+from typing import Any
 from datetime import datetime, timezone
 import logging
 import os
@@ -24,6 +25,17 @@ from tradebot.events.market import (
 MARKET_EVENT_STREAM_NAME = os.getenv("MARKET_EVENT_STREAM_NAME")
 ACTIVE_CANDIDATES_TABLE_NAME = os.getenv("ACTIVE_CANDIDATES_TABLE_NAME")
 UNIVERSE_ID = os.environ.get("UNIVERSE_ID", "default_universe")
+REFRESH_INTERVAL_SECONDS = int(os.getenv("REFRESH_INTERVAL_SECONDS", "300"))
+
+
+dynamodb_client = boto3.resource("dynamodb")
+kinesis_client = boto3.client("kinesis")
+
+def _symbol_from_message(message: dict[str, Any]) -> str:
+    symbol = message.get("id") or message.get("symbol")
+    if not symbol:
+        raise ValueError(f"Unable to determine symbol from message keys={list(message.keys())}")
+    return str(symbol).upper()
 
 def quote_event_from_yfinance_message(message: dict) -> MarketQuoteEvent:
     collector_time = datetime.now(timezone.utc)
@@ -38,7 +50,7 @@ def quote_event_from_yfinance_message(message: dict) -> MarketQuoteEvent:
     raw_payload_hash = build_raw_payload_hash(message)
 
     quote = MarketQuote(
-        symbol=message["id"],
+        symbol=_symbol_from_message(message),
         event_time=event_time,
         collector_time=collector_time,
         price=_decimal_or_none(message.get("price")),
@@ -63,33 +75,40 @@ def _decimal_or_none(value) -> Decimal | None:
 
     return Decimal(str(value))
 
-def get_active_candidates(table_name: str) -> list[str]:
-    dynamodb_client = boto3.resource("dynamodb")
+def get_active_candidates(table_name: str) -> set[str]:
     table = dynamodb_client.Table(table_name)
-    now = datetime.now(timezone.utc)
+    now_epoch = int(time.time())
 
+    query_params = {
+        "KeyConditionExpression": Key("universe_id").eq(UNIVERSE_ID),
+        "FilterExpression": Attr("expires_at").gt(now_epoch),
+        "ProjectionExpression": "symbol, expires_at",
+    }
     try:
-        response = table.query(
-            KeyConditionExpression=Key("universe_id").eq(UNIVERSE_ID),
-            FilterExpression=Attr("expires_at").gt(now.timestamp()),
-        )
-        return [item["symbol"] for item in response["Items"]]
+        symbols: set[str] = set()
+        while True:    
+            response = table.query(**query_params)
+
+            for item in response.get("Items", []):
+                symbol = str(item["symbol"]).strip().upper()
+                if symbol:
+                    symbols.add(symbol)
+
+            last_evaluated_key = response.get("LastEvaluatedKey")
+            if not last_evaluated_key:
+                break
+            query_params["ExclusiveStartKey"] = last_evaluated_key
+
+        return symbols
 
     except Exception as e:
         logger.exception("Error querying active candidates from DynamoDB")
         raise e
     
-async def subscribe_to_market_data_ws(symbols: list[str]) -> None:
-    logger.info(f"Subscribing to market data stream for symbols: {symbols}")
-    async with yfinance.AsyncWebSocket() as ws:
-        await ws.subscribe(symbols)
-        await ws.listen(message_handler=handle_market_data_message)
-    # Implement your subscription logic here, e.g. connect to a WebSocket and subscribe to updates for the given symbols.
 
 def handle_market_data_message(message: dict) -> None:
     market_quote_event: MarketQuoteEvent = quote_event_from_yfinance_message(message)
     logger.info(f"Received market quote event: {market_quote_event}")
-    kinesis_client = boto3.client("kinesis")
     try:
         kinesis_client.put_record(
             StreamName=MARKET_EVENT_STREAM_NAME,
@@ -97,26 +116,88 @@ def handle_market_data_message(message: dict) -> None:
             Data=market_quote_event.model_dump_json(exclude_none=True).encode("utf-8"),
         )
     except Exception as e:
-        logger.exception("Failed to put market quote event to Kinesis stream")
-        raise e
+        logger.exception("Failed to put market quote event to Kinesis stream\nmessage: %s\nerror: %s", market_quote_event, e)
 
+# keep in mind two web socket processes are running in parallel (listen and subscribe/unsubscribe), 
+# and there may be some overlap in messages received during subscription changes,
+# so the market data worker may receive duplicate messages for the same symbol. 
+# The worker should be designed to handle this gracefully, and downstream 
+# processing should be idempotent to avoid issues with duplicates.
+async def run_websocket_session() -> None:
+    subscribed_symbols: set[str] = set()
+
+    async with yfinance.AsyncWebSocket() as ws:
+        listener_task = asyncio.create_task(
+            ws.listen(message_handler=handle_market_data_message)
+        )
+
+        try:
+            while True:
+                if not ACTIVE_CANDIDATES_TABLE_NAME:
+                    logger.error("ACTIVE_CANDIDATES_TABLE_NAME is not set")
+                    raise RuntimeError("ACTIVE_CANDIDATES_TABLE_NAME is not set")
+
+                active_symbols = set(get_active_candidates(ACTIVE_CANDIDATES_TABLE_NAME))
+
+                symbols_to_add = active_symbols - subscribed_symbols
+                symbols_to_remove = subscribed_symbols - active_symbols
+
+                if symbols_to_add:
+                    logger.info("Subscribing to symbols: %s", sorted(symbols_to_add))
+                    await ws.subscribe(sorted(symbols_to_add))
+
+                if symbols_to_remove:
+                    logger.info("Unsubscribing from symbols: %s", sorted(symbols_to_remove))
+                    await ws.unsubscribe(sorted(symbols_to_remove))
+
+                subscribed_symbols = active_symbols
+
+                # check if listener task has exited unexpectedly
+                if listener_task.done():
+                    exc = listener_task.exception()
+                    if exc:
+                        raise exc
+                    raise RuntimeError("WebSocket listener exited unexpectedly")
+
+                logger.info(
+                    "Active universe refreshed: active=%d subscribed=%d",
+                    len(active_symbols),
+                    len(subscribed_symbols),
+                )
+
+                await asyncio.sleep(REFRESH_INTERVAL_SECONDS)
+
+        finally:
+            listener_task.cancel()
+            try:
+                await listener_task
+            except asyncio.CancelledError:
+                pass
+
+async def run_market_data_worker() -> None:
+    logger.info("Market data worker started.")
+    backoff_retry_seconds = 5
+    while True:
+        try:
+            await run_websocket_session()
+            backoff_retry_seconds = 5
+
+        except Exception:
+            logger.exception(
+                "Market data WebSocket session failed; reconnecting in %s seconds",
+                backoff_retry_seconds,
+            )
+            await asyncio.sleep(backoff_retry_seconds)
+            # Double the backoff time for the next retry, up to a maximum of 5 minutes.
+            backoff_retry_seconds = min(backoff_retry_seconds * 2, 300)
 
 async def main() -> None:
-    logger.info("Market data worker started.")
-
-    
     if not MARKET_EVENT_STREAM_NAME or not ACTIVE_CANDIDATES_TABLE_NAME:
-        logger.error("One or more required environment variables are not set.")
-        logger.error("MARKET_EVENT_STREAM_NAME=%s", MARKET_EVENT_STREAM_NAME)
-        logger.error("ACTIVE_CANDIDATES_TABLE_NAME=%s", ACTIVE_CANDIDATES_TABLE_NAME)
-        return
+        raise RuntimeError(
+            "MARKET_EVENT_STREAM_NAME and ACTIVE_CANDIDATES_TABLE_NAME are required"
+        )
 
-    active_candidates = get_active_candidates(ACTIVE_CANDIDATES_TABLE_NAME)
-    await subscribe_to_market_data_ws(active_candidates)
-
-    
-    while True:
-        await asyncio.sleep(300)
+    await run_market_data_worker()
 
 
 if __name__ == "__main__":

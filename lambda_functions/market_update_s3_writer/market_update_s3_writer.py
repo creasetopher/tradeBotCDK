@@ -19,9 +19,9 @@ TABLE_NAME = os.environ["MARKET_EVENTS_TABLE_NAME"]
 MARKET_EVENT_TTL_DAYS = int(os.environ.get("MARKET_EVENT_TTL_DAYS", "7"))
 
 s3_client = boto3.client("s3")
-dynamodb = boto3.resource("dynamodb")
+dynamodb_client = boto3.resource("dynamodb")
 
-table = dynamodb.Table(TABLE_NAME)
+table = dynamodb_client.Table(TABLE_NAME)
 
 # triggered by kineses stream, writes raw events to S3 and metadata to DynamoDB for later processing by candidate writer
 def handler(event: dict[str, Any], context: Any) -> dict[str, list[dict[str, str]]]:
@@ -60,7 +60,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, list[dict[str, str
         with table.batch_writer() as batch:
             for _, body in parsed_records:
                 symbol = str(body.get("symbol") or body.get("id") or "UNKNOWN").upper()
-                event_ts_ms = int(body.get("event_ts_ms") or body.get("time") or int(time.time() * 1000))
+                event_ts_ms = int(body.get("event_time", time.time() * 1000))
                 day = datetime.fromtimestamp(event_ts_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
                 item = {
                     "symbol_day": f"{symbol}#{day}",
