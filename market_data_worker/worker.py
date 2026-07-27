@@ -22,6 +22,8 @@ from tradebot.events.market import (
     datetime_from_epoch_ms,
 )
 
+from tradebot.providers.yfinance import quote_event_from_yfinance_message
+
 MARKET_EVENT_STREAM_NAME = os.getenv("MARKET_EVENT_STREAM_NAME")
 ACTIVE_CANDIDATES_TABLE_NAME = os.getenv("ACTIVE_CANDIDATES_TABLE_NAME")
 UNIVERSE_ID = os.environ.get("UNIVERSE_ID", "default_universe")
@@ -31,49 +33,49 @@ REFRESH_INTERVAL_SECONDS = int(os.getenv("REFRESH_INTERVAL_SECONDS", "300"))
 dynamodb_client = boto3.resource("dynamodb")
 kinesis_client = boto3.client("kinesis")
 
-def _symbol_from_message(message: dict[str, Any]) -> str:
-    symbol = message.get("id") or message.get("symbol")
-    if not symbol:
-        raise ValueError(f"Unable to determine symbol from message keys={list(message.keys())}")
-    return str(symbol).upper()
+# def _symbol_from_message(message: dict[str, Any]) -> str:
+#     symbol = message.get("id") or message.get("symbol")
+#     if not symbol:
+#         raise ValueError(f"Unable to determine symbol from message keys={list(message.keys())}")
+#     return str(symbol).upper()
 
-def quote_event_from_yfinance_message(message: dict) -> MarketQuoteEvent:
-    collector_time = datetime.now(timezone.utc)
+# def quote_event_from_yfinance_message(message: dict) -> MarketQuoteEvent:
+#     collector_time = datetime.now(timezone.utc)
 
-    source_ts_ms = message.get("time")
-    event_time = (
-        datetime_from_epoch_ms(source_ts_ms)
-        if source_ts_ms is not None
-        else collector_time
-    )
+#     source_ts_ms = message.get("time")
+#     event_time = (
+#         datetime_from_epoch_ms(source_ts_ms)
+#         if source_ts_ms is not None
+#         else collector_time
+#     )
 
-    raw_payload_hash = build_raw_payload_hash(message)
+#     raw_payload_hash = build_raw_payload_hash(message)
 
-    quote = MarketQuote(
-        symbol=_symbol_from_message(message),
-        event_time=event_time,
-        collector_time=collector_time,
-        price=_decimal_or_none(message.get("price")),
-        day_volume=_decimal_or_none(message.get("dayVolume")),
-        exchange=message.get("exchange"),
-        market_hours=message.get("marketHours"),
-        quote_type=message.get("quoteType"),
-        source_payload_ts_ms=source_ts_ms,
-        raw_payload_hash=raw_payload_hash,
-    )
+#     quote = MarketQuote(
+#         symbol=_symbol_from_message(message),
+#         event_time=event_time,
+#         collector_time=collector_time,
+#         price=_decimal_or_none(message.get("price")),
+#         day_volume=_decimal_or_none(message.get("dayVolume")),
+#         exchange=message.get("exchange"),
+#         market_hours=message.get("marketHours"),
+#         quote_type=message.get("quoteType"),
+#         source_payload_ts_ms=source_ts_ms,
+#         raw_payload_hash=raw_payload_hash,
+#     )
 
-    return MarketQuoteEvent.from_quote(
-        quote,
-        source="yfinance.websocket",
-        ingest_time=collector_time,
-    )
+#     return MarketQuoteEvent.from_quote(
+#         quote,
+#         source="yfinance.websocket",
+#         ingest_time=collector_time,
+#     )
 
 
-def _decimal_or_none(value) -> Decimal | None:
-    if value is None:
-        return None
+# def _decimal_or_none(value) -> Decimal | None:
+#     if value is None:
+#         return None
 
-    return Decimal(str(value))
+#     return Decimal(str(value))
 
 def get_active_candidates(table_name: str) -> set[str]:
     table = dynamodb_client.Table(table_name)
