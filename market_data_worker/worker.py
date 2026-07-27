@@ -94,6 +94,7 @@ def get_active_candidates(table_name: str) -> set[str]:
                 if symbol:
                     symbols.add(symbol)
 
+            # check if there are more pages of results
             last_evaluated_key = response.get("LastEvaluatedKey")
             if not last_evaluated_key:
                 break
