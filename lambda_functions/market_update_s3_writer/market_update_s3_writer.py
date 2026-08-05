@@ -60,7 +60,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, list[dict[str, str
         with table.batch_writer() as batch:
             for _, body in parsed_records:
                 symbol = str(body.get("symbol") or body.get("id") or "UNKNOWN").upper()
-                event_ts_ms = int(body.get("event_time", time.time() * 1000))
+                event_ts_ms = _event_ts_ms_from_payload(body)
                 day = datetime.fromtimestamp(event_ts_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
                 item = {
                     "symbol_day": f"{symbol}#{day}",
@@ -79,6 +79,29 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, list[dict[str, str
 
     return {"batchItemFailures": failures}
 
+# parses the event body to determine the event timestamp in milliseconds, using a series of fallbacks if the expected fields are not present
+# we do this becasue the market event stores event_time as a string in ISO 8601 format, 
+# but the quote payloads may have a source_payload_ts_ms field that is an integer timestamp in milliseconds, 
+# and we want to use that if it is present
+def _event_ts_ms_from_payload(body: dict[str, Any]) -> int:
+    if body.get("event_ts_ms") is not None:
+        return int(body["event_ts_ms"])
+
+    quote = body.get("quote") or {}
+
+    if quote.get("source_payload_ts_ms") is not None:
+        return int(quote["source_payload_ts_ms"])
+
+    if body.get("event_time") is not None:
+        event_time = body["event_time"]
+        dt = datetime.fromisoformat(event_time.replace("Z", "+00:00"))
+        return int(dt.timestamp() * 1000)
+
+    if quote.get("event_time") is not None:
+        dt = datetime.fromisoformat(quote["event_time"].replace("Z", "+00:00"))
+        return int(dt.timestamp() * 1000)
+
+    return int(time.time() * 1000)
 
 def _to_dynamodb_item(value: Any) -> Any:
     """
@@ -86,7 +109,7 @@ def _to_dynamodb_item(value: Any) -> Any:
     """
     return json.loads(json.dumps(value), parse_float=Decimal, parse_int=Decimal)
 
-def _decode_kinesis_payload(encoded_record: str) -> tuple[str, dict[str, Any]]:
+def _decode_kinesis_payload(encoded_record: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     sequence_number = encoded_record["kinesis"]["sequenceNumber"]
     return sequence_number, json.loads(base64.b64decode(encoded_record["kinesis"]["data"]).decode("utf-8"))
 

@@ -33,7 +33,7 @@ class TradeBotCdkStack(Stack):
       - historical storage: Kinesis -> Lambda -> S3 raw archive + DynamoDB hot/recent state
       - controls: SSM parameters for kill switch / trading enablement
     """
-    
+
     def __init__(
             self, 
             scope: Construct, 
@@ -279,7 +279,6 @@ class TradeBotCdkStack(Stack):
                 "STAGE": stage,
             },
         )
-    
         market_data_bucket.grant_put(market_event_writer_function)
         market_events_table.grant_write_data(market_event_writer_function)
         market_event_stream.grant_read(market_event_writer_function)
@@ -408,7 +407,7 @@ class TradeBotCdkStack(Stack):
             description="Outbound-only security group for market data worker.",
         )
 
-        ecs.FargateService(
+        market_data_worker_service = ecs.FargateService(
             self,
             "MarketDataWorkerService",
             service_name=f"{prefix}-market-data-worker",
@@ -431,6 +430,11 @@ class TradeBotCdkStack(Stack):
         CfnOutput(self, "CandidateQueueUrl", value=candidate_queue.queue_url)
         CfnOutput(self, "ScannerFunctionName", value=scanner_function.function_name)
         CfnOutput(self, "MarketDataWorkerClusterName", value=cluster.cluster_name)
+        CfnOutput(
+            self,
+            "MarketDataWorkerServiceName",
+            value=market_data_worker_service.service_name,
+        )
         CfnOutput(self, "TradingEnabledParamName", value=trading_enabled_param.parameter_name)
         CfnOutput(self, "KillSwitchParamName", value=kill_switch_param.parameter_name)
         CfnOutput(

@@ -7,6 +7,8 @@ from trade_bot_cdk.trade_bot_cdk_stack import TradeBotCdkStack
 
 
 app = cdk.App()
+
+# fallback on dev if no stage is provided via context or environment variable
 stage = app.node.try_get_context("stage") or os.getenv("STAGE", "dev")
 
 

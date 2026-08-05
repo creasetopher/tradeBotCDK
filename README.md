@@ -60,3 +60,20 @@ command.
  * `cdk docs`        open CDK documentation
 
 Enjoy!
+
+## Market-data end-to-end test
+
+The opt-in end-to-end test verifies the deployed live path from an active
+candidate through the Fargate/yfinance worker, Kinesis, and the writer Lambda
+to both S3 JSONL and DynamoDB. Deploy the current stack first so it includes
+the worker service CloudFormation output, then run the test with AWS
+credentials that can read stack outputs and data plus update the ECS service:
+
+```bash
+RUN_E2E=1 E2E_STAGE=dev .venv/bin/pytest -m e2e -v
+```
+
+Run it while US equities are publishing quotes. `E2E_SYMBOL` (default `AAPL`),
+`E2E_STACK_NAME`, `E2E_UNIVERSE_ID`, and `E2E_TIMEOUT_SECONDS` can be overridden.
+The test restores the ECS service's original desired count and restores any
+pre-existing ActiveCandidatesTable item during cleanup. Ordinary `pytest` runs skip it.
