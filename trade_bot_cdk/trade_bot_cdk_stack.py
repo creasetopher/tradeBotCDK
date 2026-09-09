@@ -39,11 +39,13 @@ class TradeBotCdkStack(Stack):
             scope: Construct, 
             construct_id: str, 
             stage: str = "dev",
+            market_event_transport: str = "sns",
             **kwargs
         ) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
         prefix = f"tradebot-{stage}"
+        self.market_event_transport = market_event_transport
 
         market_data_bucket = s3.Bucket(
             self,
@@ -423,6 +425,7 @@ class TradeBotCdkStack(Stack):
 
         CfnOutput(self, "MarketDataBucketName", value=market_data_bucket.bucket_name)
         CfnOutput(self, "MarketEventStreamName", value=market_event_stream.stream_name)
+        CfnOutput(self, "MarketEventTransport", value=self.market_event_transport)
         CfnOutput(self, "CandidatesTableName", value=candidates_table.table_name)
         CfnOutput(self, "MarketEventsTableName", value=market_events_table.table_name)
         CfnOutput(self, "BotStateTableName", value=bot_state_table.table_name)
