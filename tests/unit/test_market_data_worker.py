@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+import pytest
+
 from market_data_worker import worker
 from market_data_worker.publishers.log import LoggingMarketEventPublisher
 
@@ -43,3 +45,13 @@ def test_log_transport_publishes_event_without_aws(caplog) -> None:
 
     assert "market.quote.v1" in caplog.text
     assert '"symbol":"AAPL"' in caplog.text
+
+
+@pytest.mark.parametrize("transport", ["sqs", "firehose", "unknown"])
+# tests that the factory raises a ValueError with a message indicating the unsupported transport when an unsupported transport is provided
+def test_factory_rejects_unsupported_transport(transport: str) -> None:
+    with pytest.raises(
+        ValueError,
+        match=f"Unsupported MARKET_EVENT_TRANSPORT: {transport}",
+    ):
+        worker.create_market_event_publisher(transport)
