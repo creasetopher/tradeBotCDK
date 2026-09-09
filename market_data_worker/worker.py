@@ -9,6 +9,21 @@ from boto3.dynamodb.conditions import Key, Attr
 import yfinance
 import asyncio
 
+try:
+    from .publishers import (
+        KinesisMarketEventPublisher,
+        LoggingMarketEventPublisher,
+        MarketEventPublisher,
+        SnsMarketEventPublisher,
+    )
+except ImportError:  # worker.py is executed directly inside the container, this can happen when running the script directly for testing or debugging
+    from publishers import (
+        KinesisMarketEventPublisher,
+        LoggingMarketEventPublisher,
+        MarketEventPublisher,
+        SnsMarketEventPublisher,
+    )
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -22,13 +37,15 @@ from tradebot.events.market import (
 from tradebot.providers.yfinance import quote_event_from_yfinance_message
 
 MARKET_EVENT_STREAM_NAME = os.getenv("MARKET_EVENT_STREAM_NAME")
+MARKET_EVENT_TOPIC_ARN = os.getenv("MARKET_EVENT_TOPIC_ARN")
+MARKET_EVENT_TRANSPORT = os.getenv("MARKET_EVENT_TRANSPORT", "kinesis").lower()
 ACTIVE_CANDIDATES_TABLE_NAME = os.getenv("ACTIVE_CANDIDATES_TABLE_NAME")
 UNIVERSE_ID = os.environ.get("UNIVERSE_ID", "default_universe")
 REFRESH_INTERVAL_SECONDS = int(os.getenv("REFRESH_INTERVAL_SECONDS", "300"))
 
 
 dynamodb_client = boto3.resource("dynamodb")
-kinesis_client = boto3.client("kinesis")
+market_event_publisher: MarketEventPublisher | None = None
 
 # def _symbol_from_message(message: dict[str, Any]) -> str:
 #     symbol = message.get("id") or message.get("symbol")
@@ -106,17 +123,45 @@ def get_active_candidates(table_name: str) -> set[str]:
         raise e
     
 
-def handle_market_data_message(message: dict) -> None:
+def create_market_event_publisher(
+    transport: str,
+    *,
+    stream_name: str | None = None,
+    topic_arn: str | None = None,
+) -> MarketEventPublisher:
+    """Create the publisher configured for this worker process."""
+    normalized_transport = transport.strip().lower()
+    if normalized_transport == "log":
+        return LoggingMarketEventPublisher(logger)
+    if normalized_transport == "kinesis":
+        if not stream_name:
+            raise RuntimeError("MARKET_EVENT_STREAM_NAME is required for kinesis")
+        return KinesisMarketEventPublisher(stream_name)
+    if normalized_transport == "sns":
+        if not topic_arn:
+            raise RuntimeError("MARKET_EVENT_TOPIC_ARN is required for sns")
+        return SnsMarketEventPublisher(topic_arn)
+    raise ValueError(f"Unsupported MARKET_EVENT_TRANSPORT: {transport}")
+
+
+def handle_market_data_message(
+    message: dict,
+    publisher: MarketEventPublisher | None = None,
+) -> None:
+    """Convert a provider message and publish the resulting domain event."""
     market_quote_event: MarketQuoteEvent = quote_event_from_yfinance_message(message)
     logger.info(f"Received market quote event: {market_quote_event}")
+    selected_publisher = publisher or market_event_publisher
+    if selected_publisher is None:
+        raise RuntimeError("Market event publisher has not been configured")
     try:
-        kinesis_client.put_record(
-            StreamName=MARKET_EVENT_STREAM_NAME,
-            PartitionKey=market_quote_event.symbol,
-            Data=market_quote_event.model_dump_json(exclude_none=True).encode("utf-8"),
-        )
+        selected_publisher.publish(market_quote_event)
     except Exception as e:
-        logger.exception("Failed to put market quote event to Kinesis stream\nmessage: %s\nerror: %s", market_quote_event, e)
+        logger.exception(
+            "Failed to publish market quote event\nmessage: %s\nerror: %s",
+            market_quote_event,
+            e,
+        )
 
 # keep in mind two web socket processes are running in parallel (listen and subscribe/unsubscribe), 
 # and there may be some overlap in messages received during subscription changes,
@@ -192,10 +237,16 @@ async def run_market_data_worker() -> None:
             backoff_retry_seconds = min(backoff_retry_seconds * 2, 300)
 
 async def main() -> None:
-    if not MARKET_EVENT_STREAM_NAME or not ACTIVE_CANDIDATES_TABLE_NAME:
-        raise RuntimeError(
-            "MARKET_EVENT_STREAM_NAME and ACTIVE_CANDIDATES_TABLE_NAME are required"
-        )
+    global market_event_publisher
+
+    if not ACTIVE_CANDIDATES_TABLE_NAME:
+        raise RuntimeError("ACTIVE_CANDIDATES_TABLE_NAME is required")
+
+    market_event_publisher = create_market_event_publisher(
+        MARKET_EVENT_TRANSPORT,
+        stream_name=MARKET_EVENT_STREAM_NAME,
+        topic_arn=MARKET_EVENT_TOPIC_ARN,
+    )
 
     await run_market_data_worker()
 

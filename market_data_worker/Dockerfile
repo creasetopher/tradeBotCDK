@@ -9,5 +9,6 @@ RUN python -m pip install --upgrade pip \
     && python -m pip install --no-cache-dir -r /app/requirements.txt
 
 COPY worker.py /app/worker.py
+COPY publishers /app/publishers
 
 CMD ["python", "-u", "/app/worker.py"]
