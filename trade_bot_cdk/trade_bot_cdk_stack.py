@@ -46,6 +46,10 @@ class TradeBotCdkStack(Stack):
 
         prefix = f"tradebot-{stage}"
         self.market_event_transport = market_event_transport
+        if self.market_event_transport not in {"kinesis", "log", "sns"}:
+            raise ValueError(
+                f"Unsupported market event transport: {self.market_event_transport}"
+            )
 
         market_data_bucket = s3.Bucket(
             self,
@@ -407,6 +411,26 @@ class TradeBotCdkStack(Stack):
             ),
         )
 
+        market_data_worker_environment = {
+            "MARKET_EVENT_TRANSPORT": self.market_event_transport,
+            "ACTIVE_CANDIDATES_TABLE_NAME": active_candidates_table.table_name,
+            "UNIVERSE_ID": "default",
+            "TRADING_ENABLED_PARAM": trading_enabled_param.parameter_name,
+            "KILL_SWITCH_PARAM": kill_switch_param.parameter_name,
+            "STAGE": stage,
+        }
+
+        if self.market_event_transport == "sns":
+            market_data_worker_environment["MARKET_EVENT_TOPIC_ARN"] = (
+                market_event_topic.topic_arn
+            )
+            market_event_topic.grant_publish(task_definition.task_role)
+        elif self.market_event_transport == "kinesis":
+            market_data_worker_environment["MARKET_EVENT_STREAM_NAME"] = (
+                market_event_stream.stream_name
+            )
+            market_event_stream.grant_write(task_definition.task_role)
+
         task_definition.add_container(
             "MarketDataWorkerContainer",
             image=ecs.ContainerImage.from_asset("market_data_worker"),
@@ -414,17 +438,9 @@ class TradeBotCdkStack(Stack):
                 stream_prefix=f"{prefix}-market-data-worker",
                 log_retention=logs.RetentionDays.ONE_MONTH,
             ),
-            environment={
-                "MARKET_EVENT_STREAM_NAME": market_event_stream.stream_name,
-                "ACTIVE_CANDIDATES_TABLE_NAME": active_candidates_table.table_name,
-                "UNIVERSE_ID": "default",
-                "TRADING_ENABLED_PARAM": trading_enabled_param.parameter_name,
-                "KILL_SWITCH_PARAM": kill_switch_param.parameter_name,
-                "STAGE": stage,
-            },
+            environment=market_data_worker_environment,
         )
 
-        market_event_stream.grant_write(task_definition.task_role)
         active_candidates_table.grant_read_write_data(candidate_writer_function)
         active_candidates_table.grant_read_data(task_definition.task_role)
         bot_state_table.grant_read_write_data(task_definition.task_role)
