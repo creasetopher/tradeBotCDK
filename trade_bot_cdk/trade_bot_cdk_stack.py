@@ -263,6 +263,35 @@ class TradeBotCdkStack(Stack):
             retention_period=Duration.days(14),
         )
 
+        market_event_topic = sns.Topic(
+            self,
+            "MarketEventTopic",
+            topic_name=f"{prefix}-market-events",
+            display_name=f"{prefix} market events",
+            enforce_ssl=True,
+        )
+
+        market_event_writer_queue = sqs.Queue(
+            self,
+            "MarketEventWriterQueue",
+            queue_name=f"{prefix}-market-event-writer",
+            enforce_ssl=True,
+            receive_message_wait_time=Duration.seconds(10),
+            retention_period=Duration.days(4),
+            visibility_timeout=Duration.minutes(15),
+            dead_letter_queue=sqs.DeadLetterQueue(
+                max_receive_count=5,
+                queue=market_event_writer_dlq,
+            ),
+        )
+
+        market_event_topic.add_subscription(
+            sns_subscriptions.SqsSubscription(
+                market_event_writer_queue,
+                raw_message_delivery=True,
+            )
+        )
+
         market_event_writer_function = _lambda.Function(
             self,
             "MarketEventWriterFunction",
