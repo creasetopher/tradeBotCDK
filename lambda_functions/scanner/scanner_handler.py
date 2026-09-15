@@ -47,7 +47,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 quote=quote, 
                 screen=screen, 
                 as_of=update_time
-            )
+            ) or {}
             if not _passes_liquidity_filters(candidate):
                 continue
 
@@ -63,7 +63,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     logger.info(f"The candidates: {dict(candidates_by_symbol)}")
     published = 0
     for candidate in candidates_by_symbol.values():
-        event = CandidateSnapshotEvent.from_candidate(candidate)
+        event: CandidateSnapshotEvent = CandidateSnapshotEvent.from_candidate(candidate)
 
         sns_client.publish(
             TopicArn=CANDIDATE_TOPIC_ARN,

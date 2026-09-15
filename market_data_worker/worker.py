@@ -35,10 +35,14 @@ from tradebot.events.market import (
 )
 
 from tradebot.providers.yfinance import quote_event_from_yfinance_message
+from tradebot.models.transport import MarketEventTransport
 
 MARKET_EVENT_STREAM_NAME = os.getenv("MARKET_EVENT_STREAM_NAME")
 MARKET_EVENT_TOPIC_ARN = os.getenv("MARKET_EVENT_TOPIC_ARN")
-MARKET_EVENT_TRANSPORT = os.getenv("MARKET_EVENT_TRANSPORT", "kinesis").lower()
+MARKET_EVENT_TRANSPORT = os.getenv(
+    "MARKET_EVENT_TRANSPORT",
+    MarketEventTransport.KINESIS.value,
+)
 ACTIVE_CANDIDATES_TABLE_NAME = os.getenv("ACTIVE_CANDIDATES_TABLE_NAME")
 UNIVERSE_ID = os.environ.get("UNIVERSE_ID", "default_universe")
 REFRESH_INTERVAL_SECONDS = int(os.getenv("REFRESH_INTERVAL_SECONDS", "300"))
@@ -124,24 +128,29 @@ def get_active_candidates(table_name: str) -> set[str]:
     
 
 def create_market_event_publisher(
-    transport: str,
+    transport: str | MarketEventTransport,
     *,
     stream_name: str | None = None,
     topic_arn: str | None = None,
 ) -> MarketEventPublisher:
     """Create the publisher configured for this worker process."""
-    normalized_transport = transport.strip().lower()
-    if normalized_transport == "log":
-        return LoggingMarketEventPublisher(logger)
-    if normalized_transport == "kinesis":
-        if not stream_name:
-            raise RuntimeError("MARKET_EVENT_STREAM_NAME is required for kinesis")
-        return KinesisMarketEventPublisher(stream_name)
-    if normalized_transport == "sns":
-        if not topic_arn:
-            raise RuntimeError("MARKET_EVENT_TOPIC_ARN is required for sns")
-        return SnsMarketEventPublisher(topic_arn)
-    raise ValueError(f"Unsupported MARKET_EVENT_TRANSPORT: {transport}")
+    try:
+        normalized_transport = MarketEventTransport(transport.strip().lower())
+    except ValueError as error:
+        raise ValueError(f"Unsupported MARKET_EVENT_TRANSPORT: {transport}") from error
+
+    match normalized_transport:
+        case MarketEventTransport.LOG:
+            return LoggingMarketEventPublisher(logger)
+        case MarketEventTransport.KINESIS:
+            if not stream_name:
+                raise RuntimeError("MARKET_EVENT_STREAM_NAME is required for kinesis")
+            return KinesisMarketEventPublisher(stream_name)
+        case MarketEventTransport.SNS:
+            if not topic_arn:
+                raise RuntimeError("MARKET_EVENT_TOPIC_ARN is required for sns")
+            return SnsMarketEventPublisher(topic_arn)
+    raise AssertionError(f"Unhandled market event transport: {normalized_transport}")
 
 
 def handle_market_data_message(

@@ -22,6 +22,7 @@ from aws_cdk import (
     aws_ssm as ssm,
 )
 from constructs import Construct
+from tradebot.models.transport import MarketEventTransport
 
 
 class TradeBotCdkStack(Stack):
@@ -39,17 +40,13 @@ class TradeBotCdkStack(Stack):
             scope: Construct, 
             construct_id: str, 
             stage: str = "dev",
-            market_event_transport: str = "sns",
+            market_event_transport: MarketEventTransport = MarketEventTransport.SNS,
             **kwargs
         ) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
         prefix = f"tradebot-{stage}"
         self.market_event_transport = market_event_transport
-        if self.market_event_transport not in {"kinesis", "log", "sns"}:
-            raise ValueError(
-                f"Unsupported market event transport: {self.market_event_transport}"
-            )
 
         market_data_bucket = s3.Bucket(
             self,
@@ -296,7 +293,7 @@ class TradeBotCdkStack(Stack):
             )
         )
 
-        market_event_writer_function = _lambda.Function(
+        market_event_writer_lambda = _lambda.Function(
             self,
             "MarketEventWriterFunction",
             function_name=f"{prefix}-market-event-writer",
@@ -314,10 +311,12 @@ class TradeBotCdkStack(Stack):
                 "STAGE": stage,
             },
         )
-        market_data_bucket.grant_put(market_event_writer_function)
-        market_events_table.grant_write_data(market_event_writer_function)
-        market_event_stream.grant_read(market_event_writer_function)
-        market_event_writer_function.add_event_source(
+        market_data_bucket.grant_put(market_event_writer_lambda)
+        market_events_table.grant_write_data(market_event_writer_lambda)
+        market_event_stream.grant_read(market_event_writer_lambda)
+
+        # Kinesis triggers the market event s3 writer Lambda
+        market_event_writer_lambda.add_event_source(
             lambda_event_sources.KinesisEventSource(
                 market_event_stream,
                 starting_position=_lambda.StartingPosition.LATEST,
@@ -330,6 +329,19 @@ class TradeBotCdkStack(Stack):
                 on_failure=lambda_event_sources.SqsDlq(market_event_writer_dlq),
             )
         )
+
+        # SQS triggers the market event s3 writer Lambda
+        # SQS is configured to handle batch failure responses, 
+        # so the Lambda may be retried for failed records.
+        market_event_writer_lambda.add_event_source(
+            lambda_event_sources.SqsEventSource(
+                market_event_writer_queue,
+                batch_size=100,
+                max_batching_window=Duration.seconds(10),
+                report_batch_item_failures=True,
+            )
+        )
+
 
         # The scanner is time-boxed and runs in Lambda.
         # Market hours/holidays gating should still live in the function code because 
@@ -412,7 +424,7 @@ class TradeBotCdkStack(Stack):
         )
 
         market_data_worker_environment = {
-            "MARKET_EVENT_TRANSPORT": self.market_event_transport,
+            "MARKET_EVENT_TRANSPORT": self.market_event_transport.value,
             "ACTIVE_CANDIDATES_TABLE_NAME": active_candidates_table.table_name,
             "UNIVERSE_ID": "default",
             "TRADING_ENABLED_PARAM": trading_enabled_param.parameter_name,
@@ -420,12 +432,12 @@ class TradeBotCdkStack(Stack):
             "STAGE": stage,
         }
 
-        if self.market_event_transport == "sns":
+        if self.market_event_transport == MarketEventTransport.SNS:
             market_data_worker_environment["MARKET_EVENT_TOPIC_ARN"] = (
                 market_event_topic.topic_arn
             )
             market_event_topic.grant_publish(task_definition.task_role)
-        elif self.market_event_transport == "kinesis":
+        elif self.market_event_transport == MarketEventTransport.KINESIS:
             market_data_worker_environment["MARKET_EVENT_STREAM_NAME"] = (
                 market_event_stream.stream_name
             )
@@ -470,7 +482,11 @@ class TradeBotCdkStack(Stack):
 
         CfnOutput(self, "MarketDataBucketName", value=market_data_bucket.bucket_name)
         CfnOutput(self, "MarketEventStreamName", value=market_event_stream.stream_name)
-        CfnOutput(self, "MarketEventTransport", value=self.market_event_transport)
+        CfnOutput(
+            self,
+            "MarketEventTransport",
+            value=self.market_event_transport.value,
+        )
         CfnOutput(self, "CandidatesTableName", value=candidates_table.table_name)
         CfnOutput(self, "MarketEventsTableName", value=market_events_table.table_name)
         CfnOutput(self, "BotStateTableName", value=bot_state_table.table_name)

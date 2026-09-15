@@ -4,6 +4,7 @@ import logging
 from dataclasses import dataclass
 
 import pytest
+from tradebot.models.transport import MarketEventTransport
 
 from market_data_worker import worker
 from market_data_worker.publishers.log import LoggingMarketEventPublisher
@@ -37,7 +38,7 @@ def test_handle_market_data_message_publishes_converted_event(monkeypatch) -> No
 
 
 def test_log_transport_publishes_event_without_aws(caplog) -> None:
-    publisher = worker.create_market_event_publisher("log")
+    publisher = worker.create_market_event_publisher(MarketEventTransport.LOG)
 
     assert isinstance(publisher, LoggingMarketEventPublisher)
     with caplog.at_level(logging.INFO):
