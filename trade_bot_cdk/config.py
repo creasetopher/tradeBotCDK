@@ -1,3 +1,5 @@
+from typing import Literal
+
 """Deployment configuration shared by the CDK application and stacks."""
 
 from tradebot.models.transport import MarketEventTransport
@@ -30,3 +32,20 @@ def resolve_market_event_transport(
             f"Unsupported marketEventTransport '{transport_value}'. "
             f"Expected one of: {supported}"
         ) from error
+
+
+def resolve_scanner_state(
+    stage: str,
+    context_override: Literal["0", "1"] | None = None
+) -> bool:
+    """Resolve the context override or fall back to the stage default."""
+    if context_override is None:
+        return stage.lower() == "prod"
+
+    if context_override not in ("0", "1"):
+        raise ValueError(
+            f"Unsupported scanner state '{context_override}'. "
+            f"Expected one of: {0, 1}"
+        )
+
+    return int(context_override) == 1

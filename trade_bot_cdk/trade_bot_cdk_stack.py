@@ -30,8 +30,8 @@ class TradeBotCdkStack(Stack):
 
     This version separates:
       - candidate discovery: scheduled Lambda -> SNS -> SQS -> DynamoDB
-      - market data ingestion: long-running ECS/Fargate worker -> Kinesis
-      - historical storage: Kinesis -> Lambda -> S3 raw archive + DynamoDB hot/recent state
+      - market data ingestion: long-running ECS/Fargate worker -> selected transport
+      - historical storage: transport -> Lambda -> S3 raw archive + DynamoDB hot/recent state
       - controls: SSM parameters for kill switch / trading enablement
     """
 
@@ -41,13 +41,14 @@ class TradeBotCdkStack(Stack):
             construct_id: str, 
             stage: str = "dev",
             market_event_transport: MarketEventTransport = MarketEventTransport.SNS,
+            scanner_enabled: bool = False,
             **kwargs
         ) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
         prefix = f"tradebot-{stage}"
         self.market_event_transport = market_event_transport
-
+        self.scanner_enabled = scanner_enabled
         market_data_bucket = s3.Bucket(
             self,
             "MarketDataBucket",
@@ -140,15 +141,6 @@ class TradeBotCdkStack(Stack):
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
             point_in_time_recovery=True,
             removal_policy=RemovalPolicy.RETAIN,
-        )
-
-        market_event_stream = kinesis.Stream(
-            self,
-            "MarketEventStream",
-            stream_name=f"{prefix}-market-events",
-            stream_mode=kinesis.StreamMode.ON_DEMAND,
-            retention_period=Duration.hours(24),
-            encryption=kinesis.StreamEncryption.MANAGED,
         )
 
         # Candidate discovery fan-out: scanner Lambda publishes candidate snapshots to SNS.
@@ -256,91 +248,117 @@ class TradeBotCdkStack(Stack):
             )
         )
 
-        market_event_writer_dlq = sqs.Queue(
-            self,
-            "MarketEventWriterDlq",
-            queue_name=f"{prefix}-market-event-writer-dlq",
-            enforce_ssl=True,
-            retention_period=Duration.days(14),
-        )
+        market_event_stream: kinesis.Stream | None = None
+        market_event_topic: sns.Topic | None = None
+        market_event_writer_queue: sqs.Queue | None = None
 
-        market_event_topic = sns.Topic(
-            self,
-            "MarketEventTopic",
-            topic_name=f"{prefix}-market-events",
-            display_name=f"{prefix} market events",
-            enforce_ssl=True,
-        )
-
-        market_event_writer_queue = sqs.Queue(
-            self,
-            "MarketEventWriterQueue",
-            queue_name=f"{prefix}-market-event-writer",
-            enforce_ssl=True,
-            receive_message_wait_time=Duration.seconds(10),
-            retention_period=Duration.days(4),
-            visibility_timeout=Duration.minutes(15),
-            dead_letter_queue=sqs.DeadLetterQueue(
-                max_receive_count=5,
-                queue=market_event_writer_dlq,
-            ),
-        )
-
-        market_event_topic.add_subscription(
-            sns_subscriptions.SqsSubscription(
-                market_event_writer_queue,
-                raw_message_delivery=True,
+        ## The log transport - used in local development and testing. 
+        ## The worker will log market events instead of publishing them to a transport.
+        if self.market_event_transport != MarketEventTransport.LOG:
+            market_event_writer_dlq = sqs.Queue(
+                self,
+                "MarketEventWriterDlq",
+                queue_name=f"{prefix}-market-event-writer-dlq",
+                enforce_ssl=True,
+                retention_period=Duration.days(14),
             )
-        )
 
-        market_event_writer_lambda = _lambda.Function(
-            self,
-            "MarketEventWriterFunction",
-            function_name=f"{prefix}-market-event-writer",
-            runtime=_lambda.Runtime.PYTHON_3_12,
-            architecture=_lambda.Architecture.ARM_64,
-            handler="market_update_s3_writer.handler",
-            code=_lambda.Code.from_asset("lambda_functions/market_update_s3_writer"),
-            memory_size=512,
-            timeout=Duration.seconds(120),
-            log_retention=logs.RetentionDays.ONE_MONTH,
-            environment={
-                "MARKET_DATA_BUCKET_NAME": market_data_bucket.bucket_name,
-                "MARKET_EVENTS_TABLE_NAME": market_events_table.table_name,
-                "MARKET_EVENT_TTL_DAYS": "7",
-                "STAGE": stage,
-            },
-        )
-        market_data_bucket.grant_put(market_event_writer_lambda)
-        market_events_table.grant_write_data(market_event_writer_lambda)
-        market_event_stream.grant_read(market_event_writer_lambda)
-
-        # Kinesis triggers the market event s3 writer Lambda
-        market_event_writer_lambda.add_event_source(
-            lambda_event_sources.KinesisEventSource(
-                market_event_stream,
-                starting_position=_lambda.StartingPosition.LATEST,
-                batch_size=100,
-                max_batching_window=Duration.seconds(10),
-                bisect_batch_on_error=True,
-                report_batch_item_failures=True,
-                retry_attempts=3,
-                max_record_age=Duration.hours(2),
-                on_failure=lambda_event_sources.SqsDlq(market_event_writer_dlq),
+            market_event_writer_lambda = _lambda.Function(
+                self,
+                "MarketEventWriterFunction",
+                function_name=f"{prefix}-market-event-writer",
+                runtime=_lambda.Runtime.PYTHON_3_12,
+                architecture=_lambda.Architecture.ARM_64,
+                handler="market_update_s3_writer.handler",
+                code=_lambda.Code.from_asset(
+                    "lambda_functions/market_update_s3_writer"
+                ),
+                memory_size=512,
+                timeout=Duration.seconds(120),
+                log_retention=logs.RetentionDays.ONE_MONTH,
+                environment={
+                    "MARKET_DATA_BUCKET_NAME": market_data_bucket.bucket_name,
+                    "MARKET_EVENTS_TABLE_NAME": market_events_table.table_name,
+                    "MARKET_EVENT_TTL_DAYS": "7",
+                    "STAGE": stage,
+                },
             )
-        )
+            market_data_bucket.grant_put(market_event_writer_lambda)
+            market_events_table.grant_write_data(market_event_writer_lambda)
 
-        # SQS triggers the market event s3 writer Lambda
-        # SQS is configured to handle batch failure responses, 
-        # so the Lambda may be retried for failed records.
-        market_event_writer_lambda.add_event_source(
-            lambda_event_sources.SqsEventSource(
-                market_event_writer_queue,
-                batch_size=100,
-                max_batching_window=Duration.seconds(10),
-                report_batch_item_failures=True,
-            )
-        )
+
+            ## The Kinesis transport - used in production. 
+            ## The worker will publish market events to a Kinesis stream that triggers the market event writer lambda.
+            ## Only the necessary resources are created for the selected transport, so if you select Kinesis, no SNS topic is created.
+
+            
+            if self.market_event_transport == MarketEventTransport.KINESIS:
+                market_event_stream = kinesis.Stream(
+                    self,
+                    "MarketEventStream",
+                    stream_name=f"{prefix}-market-events",
+                    stream_mode=kinesis.StreamMode.ON_DEMAND,
+                    retention_period=Duration.hours(24),
+                    encryption=kinesis.StreamEncryption.MANAGED,
+                )
+                market_event_stream.grant_read(market_event_writer_lambda)
+                market_event_writer_lambda.add_event_source(
+                    lambda_event_sources.KinesisEventSource(
+                        market_event_stream,
+                        starting_position=_lambda.StartingPosition.LATEST,
+                        batch_size=100,
+                        max_batching_window=Duration.seconds(10),
+                        bisect_batch_on_error=True,
+                        report_batch_item_failures=True,
+                        retry_attempts=3,
+                        max_record_age=Duration.hours(2),
+                        on_failure=lambda_event_sources.SqsDlq(
+                            market_event_writer_dlq
+                        ),
+                    )
+                )
+
+
+
+            ## The SNS transport - used in testing and dev (for now)
+            ## if this transporrt is selected, the worker will publish to an SNS topic that is picked up by an SQS queue that triggers the market event writer lambda.
+            ## Only the necessary resources are created for the selected transport, so if you select SNS, no Kinesis stream is created.
+
+            elif self.market_event_transport == MarketEventTransport.SNS:
+                market_event_topic = sns.Topic(
+                    self,
+                    "MarketEventTopic",
+                    topic_name=f"{prefix}-market-events",
+                    display_name=f"{prefix} market events",
+                    enforce_ssl=True,
+                )
+                market_event_writer_queue = sqs.Queue(
+                    self,
+                    "MarketEventWriterQueue",
+                    queue_name=f"{prefix}-market-event-writer",
+                    enforce_ssl=True,
+                    receive_message_wait_time=Duration.seconds(10),
+                    retention_period=Duration.days(4),
+                    visibility_timeout=Duration.minutes(15),
+                    dead_letter_queue=sqs.DeadLetterQueue(
+                        max_receive_count=5,
+                        queue=market_event_writer_dlq,
+                    ),
+                )
+                market_event_topic.add_subscription(
+                    sns_subscriptions.SqsSubscription(
+                        market_event_writer_queue,
+                        raw_message_delivery=True,
+                    )
+                )
+                market_event_writer_lambda.add_event_source(
+                    lambda_event_sources.SqsEventSource(
+                        market_event_writer_queue,
+                        batch_size=100,
+                        max_batching_window=Duration.seconds(10),
+                        report_batch_item_failures=True,
+                    )
+                )
 
 
         # The scanner is time-boxed and runs in Lambda.
@@ -371,6 +389,7 @@ class TradeBotCdkStack(Stack):
                 time_zone=TimeZone.AMERICA_NEW_YORK,
             ),
             target=scanner_target,
+            enabled=self.scanner_enabled
         )
 
         # SAFETY SWITCHES: SSM parameters that must be manually toggled to enable live trading or disable all order execution.
@@ -433,11 +452,13 @@ class TradeBotCdkStack(Stack):
         }
 
         if self.market_event_transport == MarketEventTransport.SNS:
+            assert market_event_topic is not None
             market_data_worker_environment["MARKET_EVENT_TOPIC_ARN"] = (
                 market_event_topic.topic_arn
             )
             market_event_topic.grant_publish(task_definition.task_role)
         elif self.market_event_transport == MarketEventTransport.KINESIS:
+            assert market_event_stream is not None
             market_data_worker_environment["MARKET_EVENT_STREAM_NAME"] = (
                 market_event_stream.stream_name
             )
@@ -481,7 +502,12 @@ class TradeBotCdkStack(Stack):
         )
 
         CfnOutput(self, "MarketDataBucketName", value=market_data_bucket.bucket_name)
-        CfnOutput(self, "MarketEventStreamName", value=market_event_stream.stream_name)
+        if market_event_stream is not None:
+            CfnOutput(
+                self,
+                "MarketEventStreamName",
+                value=market_event_stream.stream_name,
+            )
         CfnOutput(
             self,
             "MarketEventTransport",
@@ -506,6 +532,13 @@ class TradeBotCdkStack(Stack):
             "ActiveCandidatesTableName",
             value=active_candidates_table.table_name,
         )
+        if market_event_writer_queue is not None:
+            CfnOutput(
+                self,
+                "MarketEventWriterQueueName",
+                value=market_event_writer_queue.queue_name,
+            )
+
 
     @staticmethod
     def _bundled_python_lambda_code(path: str) -> _lambda.Code:

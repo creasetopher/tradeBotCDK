@@ -44,9 +44,9 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
         for quote in response.get("quotes", []):
             candidate = _candidate_from_quote(
-                quote=quote, 
-                screen=screen, 
-                as_of=update_time
+                quote = quote, 
+                screen = screen, 
+                as_of = update_time
             ) or {}
             if not _passes_liquidity_filters(candidate):
                 continue

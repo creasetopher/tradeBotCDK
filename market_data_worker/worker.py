@@ -153,11 +153,15 @@ def create_market_event_publisher(
     raise AssertionError(f"Unhandled market event transport: {normalized_transport}")
 
 
+# this is where a symbol that the worker has subscribed to is converted to a market quuote event
+# then that event is written to kinesis or sqs or logged, depending on the configured transport.
 def handle_market_data_message(
     message: dict,
     publisher: MarketEventPublisher | None = None,
 ) -> None:
     """Convert a provider message and publish the resulting domain event."""
+    ## TODO: abstract the quote_event_from_yfinance_message function to a provider module, 
+    ##  so that this function can be more generic and not tied to yfinance specifically.
     market_quote_event: MarketQuoteEvent = quote_event_from_yfinance_message(message)
     logger.info(f"Received market quote event: {market_quote_event}")
     selected_publisher = publisher or market_event_publisher

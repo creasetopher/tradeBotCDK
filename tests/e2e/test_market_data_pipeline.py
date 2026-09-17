@@ -3,7 +3,7 @@
 The test covers:
 
 ActiveCandidatesTable -> Fargate worker -> yfinance WebSocket ->
-market.quote.v1 -> Kinesis -> MarketEventWriter -> S3 JSONL + MarketEventsTable
+market.quote.v1 -> SNS -> SQS -> MarketEventWriter -> S3 JSONL + MarketEventsTable
 
 It intentionally uses the public yfinance feed, so run it while US equities are
 actively publishing quotes. Set RUN_E2E=1 to opt in.
@@ -16,11 +16,11 @@ import os
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
-
+from collections.abc import Callable
 import boto3
 import pytest
 from boto3.dynamodb.conditions import Key
-
+from tradebot.models.transport import MarketEventTransport
 
 pytestmark = [
     pytest.mark.e2e,
@@ -35,7 +35,7 @@ POLL_INTERVAL_SECONDS = 10
 DEFAULT_TIMEOUT_SECONDS = 12 * 60
 
 
-def _stack_outputs(cloudformation: Any, stack_name: str) -> dict[str, str]:
+def get_stack_outputs(cloudformation: Any, stack_name: str) -> dict[str, str]:
     """Return a deployed CloudFormation stack's outputs as a name/value mapping.
 
     CloudFormation represents outputs as a list of objects containing
@@ -59,7 +59,7 @@ def _stack_outputs(cloudformation: Any, stack_name: str) -> dict[str, str]:
     return {output["OutputKey"]: output["OutputValue"] for output in outputs}
 
 
-def _wait_until(description: str, timeout_seconds: int, probe: Any) -> Any:
+def _wait_until(description: str, timeout_seconds: int, probe: Callable[[], Any | None]) -> Any:
     """Poll a probe until it returns a non-None result or time runs out.
 
     The pipeline is asynchronous, so a quote will not appear in S3 or DynamoDB
@@ -88,6 +88,7 @@ def _wait_until(description: str, timeout_seconds: int, probe: Any) -> Any:
 
     while time.monotonic() < deadline:
         try:
+            print(f"Waiting for {probe.__name__}... This will be called at least once...")
             result = probe()
             if result is not None:
                 return result
@@ -159,7 +160,7 @@ def _event_timestamp_ms(payload: dict[str, Any]) -> int:
     return int(parsed.timestamp() * 1000)
 
 
-def test_active_candidate_reaches_s3_and_market_events_table() -> None:
+def test_end_to_end() -> None:
     """Prove a real yfinance quote traverses every deployed pipeline stage."""
     stage = os.environ.get("E2E_STAGE", "dev")
     stack_name = os.environ.get("E2E_STACK_NAME", f"TradeBotCdkStack-{stage}")
@@ -172,7 +173,8 @@ def test_active_candidate_reaches_s3_and_market_events_table() -> None:
     ecs = session.client("ecs")
     s3 = session.client("s3")
     dynamodb = session.resource("dynamodb")
-    outputs = _stack_outputs(cloudformation, stack_name)
+    cloudwatch = session.client("cloudwatch")
+    outputs = get_stack_outputs(cloudformation, stack_name)
 
     required_outputs = {
         "ActiveCandidatesTableName",
@@ -180,13 +182,23 @@ def test_active_candidate_reaches_s3_and_market_events_table() -> None:
         "MarketEventsTableName",
         "MarketDataWorkerClusterName",
         "MarketDataWorkerServiceName",
+        "MarketEventTransport",
+        "MarketEventWriterQueueName",
     }
+    print(f"Stack {stack_name} outputs: {json.dumps(outputs, indent=2)}")
     missing = required_outputs - outputs.keys()
     # check for missing outputs, ensuring the stack is deployed and outputs are available
     assert not missing, f"Deploy the current CDK stack; missing outputs: {sorted(missing)}"
+    assert (
+        outputs["MarketEventTransport"] == MarketEventTransport.SNS.value
+    )
 
+    
     active_table = dynamodb.Table(outputs["ActiveCandidatesTableName"])
     events_table = dynamodb.Table(outputs["MarketEventsTableName"])
+
+    sqs_queue_name = outputs["MarketEventWriterQueueName"]
+
     # check that the worker cluster and service exist, ensuring the pipeline is deployed
     cluster = outputs["MarketDataWorkerClusterName"]
 
@@ -249,13 +261,47 @@ def test_active_candidate_reaches_s3_and_market_events_table() -> None:
                 None,
             )
 
-        item = _wait_until(
+        def find_sqs_messages_sent() -> float | None:
+            response = cloudwatch.get_metric_statistics(
+                Namespace="AWS/SQS",
+                MetricName="NumberOfMessagesSent",
+                Dimensions=[
+                    {
+                        "Name": "QueueName",
+                        "Value": sqs_queue_name,
+                    }
+                ],
+                StartTime=test_started_at,
+                EndTime=datetime.now(timezone.utc),
+                Period=60,
+                Statistics=["Sum"],
+            )
+
+            # cloudwatch gives a list of datapoints representing 60-second buckets. 
+            # Sum the values to get the total number of messages sent since start_time.
+            messages_sent = sum(
+                datapoint["Sum"]
+                for datapoint in response.get("Datapoints", [])
+            )
+
+            return messages_sent if messages_sent > 0 else None
+
+        ddb_item = _wait_until(
             "the correlated MarketEventsTable row",
             timeout_seconds,
             find_correlated_dynamodb_item,
         )
-        assert item["symbol"] == symbol
-        assert item["source"] == "yfinance.websocket"
+
+        sqs_messages_sent = _wait_until(
+            "a message sent to the MarketEventWriter SQS queue",
+            timeout_seconds,
+            find_sqs_messages_sent,
+        )
+
+        assert ddb_item["symbol"] == symbol
+        assert ddb_item["source"] == "yfinance.websocket"
+        assert sqs_messages_sent >= 1
+
         assert payload["schema_version"] == "1.0.0"
     finally:
         if previous_candidate is None:

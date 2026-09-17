@@ -91,6 +91,22 @@ def _assert_sns_transport_config(
 ) -> None:
     assert "MARKET_EVENT_TOPIC_ARN" in environment
     assert "MARKET_EVENT_STREAM_NAME" not in environment
+    template.resource_count_is("AWS::Kinesis::Stream", 0)
+    template.resource_properties_count_is(
+        "AWS::SNS::Topic",
+        {"TopicName": "tradebot-test-market-events"},
+        1,
+    )
+    template.resource_properties_count_is(
+        "AWS::SQS::Queue",
+        {"QueueName": "tradebot-test-market-event-writer"},
+        1,
+    )
+    template.resource_properties_count_is(
+        "AWS::Lambda::Function",
+        {"Handler": "market_update_s3_writer.handler"},
+        1,
+    )
 
     template.has_resource_properties(
         "AWS::IAM::Policy",
@@ -120,6 +136,22 @@ def _assert_kinesis_transport_config(
     assert environment["MARKET_EVENT_TRANSPORT"] == MarketEventTransport.KINESIS.value
     assert "MARKET_EVENT_STREAM_NAME" in environment
     assert "MARKET_EVENT_TOPIC_ARN" not in environment
+    template.resource_count_is("AWS::Kinesis::Stream", 1)
+    template.resource_properties_count_is(
+        "AWS::SNS::Topic",
+        {"TopicName": "tradebot-test-market-events"},
+        0,
+    )
+    template.resource_properties_count_is(
+        "AWS::SQS::Queue",
+        {"QueueName": "tradebot-test-market-event-writer"},
+        0,
+    )
+    template.resource_properties_count_is(
+        "AWS::Lambda::Function",
+        {"Handler": "market_update_s3_writer.handler"},
+        1,
+    )
 
     template.has_resource_properties(
         "AWS::IAM::Policy",
@@ -154,6 +186,27 @@ def _assert_log_transport_config(
     assert environment["MARKET_EVENT_TRANSPORT"] == MarketEventTransport.LOG.value
     assert "MARKET_EVENT_TOPIC_ARN" not in environment
     assert "MARKET_EVENT_STREAM_NAME" not in environment
+    template.resource_count_is("AWS::Kinesis::Stream", 0)
+    template.resource_properties_count_is(
+        "AWS::SNS::Topic",
+        {"TopicName": "tradebot-test-market-events"},
+        0,
+    )
+    template.resource_properties_count_is(
+        "AWS::SQS::Queue",
+        {"QueueName": "tradebot-test-market-event-writer"},
+        0,
+    )
+    template.resource_properties_count_is(
+        "AWS::SQS::Queue",
+        {"QueueName": "tradebot-test-market-event-writer-dlq"},
+        0,
+    )
+    template.resource_properties_count_is(
+        "AWS::Lambda::Function",
+        {"Handler": "market_update_s3_writer.handler"},
+        0,
+    )
 
 
     template.has_resource_properties(

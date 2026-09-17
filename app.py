@@ -3,7 +3,7 @@ import os
 
 import aws_cdk as cdk
 
-from trade_bot_cdk.config import resolve_market_event_transport
+from trade_bot_cdk.config import resolve_market_event_transport, resolve_scanner_state
 from trade_bot_cdk.trade_bot_cdk_stack import TradeBotCdkStack
 
 
@@ -15,7 +15,10 @@ market_event_transport = resolve_market_event_transport(
     stage,
     app.node.try_get_context("marketEventTransport"),
 )
-
+scanner_state = resolve_scanner_state(
+    stage,
+    app.node.try_get_context("scannerState"),
+)
 
 TradeBotCdkStack(
     app,
@@ -26,6 +29,7 @@ TradeBotCdkStack(
         account=os.getenv("CDK_DEFAULT_ACCOUNT"),
         region=os.getenv("CDK_DEFAULT_REGION"),
     ),
+    scanner_enabled=scanner_state,
 )
 
 app.synth()
