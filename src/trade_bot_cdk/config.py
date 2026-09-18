@@ -1,3 +1,5 @@
+"""Stage-specific CDK configuration."""
+
 from typing import Literal
 
 """Deployment configuration shared by the CDK application and stacks."""

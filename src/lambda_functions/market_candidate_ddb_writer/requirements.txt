@@ -1,0 +1,3 @@
+# Lambda runtime dependencies
+pydantic>=2,<3
+tradebot2 @ git+https://${GITHUB_USER}:${GITHUB_TOKEN}@github.com/creasetopher/tradebotApp.git

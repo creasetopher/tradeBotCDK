@@ -1,3 +1,5 @@
+"""Infrastructure definition for the trade bot application."""
+
 import os
 
 from aws_cdk import (
@@ -203,7 +205,7 @@ class TradeBotCdkStack(Stack):
             runtime=_lambda.Runtime.PYTHON_3_12,
             architecture=_lambda.Architecture.ARM_64,
             handler="scanner_handler.handler",
-            code=self._bundled_python_lambda_code("lambda_functions/scanner"),
+            code=self._bundled_python_lambda_code("src/lambda_functions/scanner"),
             memory_size=512,
             timeout=Duration.seconds(60),
             log_retention=logs.RetentionDays.ONE_MONTH,
@@ -226,7 +228,7 @@ class TradeBotCdkStack(Stack):
             architecture=_lambda.Architecture.ARM_64,
             handler="candidate_ddb_writer.handler",
             code=self._bundled_python_lambda_code(
-                "lambda_functions/market_candidate_ddb_writer"
+                "src/lambda_functions/market_candidate_ddb_writer"
             ),
             memory_size=256,
             timeout=Duration.seconds(60),
@@ -273,7 +275,7 @@ class TradeBotCdkStack(Stack):
                 architecture=_lambda.Architecture.ARM_64,
                 handler="market_update_s3_writer.handler",
                 code=_lambda.Code.from_asset(
-                    "lambda_functions/market_update_s3_writer"
+                    "src/lambda_functions/market_update_s3_writer"
                 ),
                 memory_size=512,
                 timeout=Duration.seconds(120),
@@ -468,7 +470,7 @@ class TradeBotCdkStack(Stack):
 
         task_definition.add_container(
             "MarketDataWorkerContainer",
-            image=ecs.ContainerImage.from_asset("market_data_worker"),
+            image=ecs.ContainerImage.from_asset("src/market_data_worker"),
             logging=ecs.LogDrivers.aws_logs(
                 stream_prefix=f"{prefix}-market-data-worker",
                 log_retention=logs.RetentionDays.ONE_MONTH,

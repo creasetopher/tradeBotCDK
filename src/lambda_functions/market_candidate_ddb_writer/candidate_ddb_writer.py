@@ -1,3 +1,5 @@
+"""Persist scanner candidate events in DynamoDB."""
+
 from __future__ import annotations
 
 import json

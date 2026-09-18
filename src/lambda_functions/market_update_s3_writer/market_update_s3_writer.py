@@ -1,3 +1,5 @@
+"""Write normalized market events to S3 and DynamoDB."""
+
 from __future__ import annotations
 
 import base64

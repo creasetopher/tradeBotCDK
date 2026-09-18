@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
 import os
+import sys
+from pathlib import Path
+
+# Keep the executable CDK entry point at the repository root while application
+# packages live in the conventional src directory.
+sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
 import aws_cdk as cdk
 

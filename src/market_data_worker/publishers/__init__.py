@@ -1,4 +1,4 @@
-"""Market-event publisher implementations."""
+"""Public market-event publisher implementations."""
 
 from .base import MarketEventPublisher
 from .kinesis import KinesisMarketEventPublisher

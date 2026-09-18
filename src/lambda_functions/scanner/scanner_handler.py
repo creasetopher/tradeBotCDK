@@ -1,3 +1,5 @@
+"""Discover and publish market candidates."""
+
 from __future__ import annotations
 
 import json

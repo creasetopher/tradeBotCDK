@@ -1,4 +1,4 @@
-"""SNS implementation of the market-event publisher."""
+"""Publish market events through Amazon SNS."""
 
 from __future__ import annotations
 

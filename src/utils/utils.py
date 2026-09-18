@@ -1,3 +1,5 @@
+"""Legacy market-data utilities retained for compatibility."""
+
 import yfinance as yf
 from typing import Callable
 from dataclasses import dataclass

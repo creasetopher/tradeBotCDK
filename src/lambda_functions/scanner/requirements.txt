@@ -1,0 +1,4 @@
+# Lambda runtime dependencies
+yfinance>=0.2,<0.3
+pydantic>=2,<3
+tradebot2 @ git+https://${GITHUB_USER}:${GITHUB_TOKEN}@github.com/creasetopher/tradebotApp.git

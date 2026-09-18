@@ -1,4 +1,4 @@
-"""Common interface for publishing market events."""
+"""Common interface implemented by market-event publishers."""
 
 from __future__ import annotations
 

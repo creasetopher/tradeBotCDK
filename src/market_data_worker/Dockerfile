@@ -1,3 +1,4 @@
+# Market-data worker runtime image
 FROM public.ecr.aws/docker/library/python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1

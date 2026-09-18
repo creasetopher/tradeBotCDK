@@ -1,4 +1,4 @@
-"""Kinesis implementation of the market-event publisher."""
+"""Publish market events through Amazon Kinesis."""
 
 from __future__ import annotations
 

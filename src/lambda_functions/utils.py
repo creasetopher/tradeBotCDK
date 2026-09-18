@@ -1,4 +1,5 @@
 # THIS FILE SHOULD BE DEPRECATED.
+# It remains under src until its callers are migrated.
 # THE ACTUAL UTILS ARE IN utils/utils.py
 
 import requests
@@ -132,4 +133,3 @@ async def async_main():
 
 if __name__ == "__main__":
     asyncio.run(async_main())
-
