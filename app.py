@@ -5,6 +5,8 @@ from pathlib import Path
 
 # Keep the executable CDK entry point at the repository root while application
 # packages live in the conventional src directory.
+# when Python runs root-level app.py, it automatically searches the repository root, but not the src/ directory
+# we need this so imports across modules will work 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
 import aws_cdk as cdk
