@@ -1,2 +1,2 @@
 pydantic>=2,<3
-tradebot2 @ https://github.com/creasetopher/tradebotApp/archive/refs/heads/main.zip
+tradebot2 @ git+https://${GITHUB_USER}:${GITHUB_TOKEN}@github.com/creasetopher/tradebotApp.git

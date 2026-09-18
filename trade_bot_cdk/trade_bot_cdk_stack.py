@@ -1,3 +1,5 @@
+import os
+
 from aws_cdk import (
     BundlingOptions,
     CfnOutput,
@@ -546,6 +548,11 @@ class TradeBotCdkStack(Stack):
             path,
             bundling=BundlingOptions(
                 image=_lambda.Runtime.PYTHON_3_12.bundling_image,
+                environment={
+                    "GITHUB_USER": os.environ["GITHUB_USER"],
+                    "GITHUB_TOKEN": os.environ["GITHUB_TOKEN"],
+                },
+
                 command=[
                     "bash",
                     "-c",
