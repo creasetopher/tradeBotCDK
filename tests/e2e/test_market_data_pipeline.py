@@ -2,8 +2,10 @@
 
 The test covers:
 
-ActiveCandidatesTable -> Fargate worker -> yfinance WebSocket ->
-market.quote.v1 -> SNS -> SQS -> MarketEventWriter -> S3 JSONL + MarketEventsTable
+CandidateUpdatesTopic -> CandidateUpdatesQueue -> CandidateWriter ->
+CandidatesTable + ActiveCandidatesTable -> Fargate worker ->
+yfinance WebSocket -> market.quote.v1 -> SNS -> SQS -> MarketEventWriter ->
+S3 JSONL + MarketEventsTable
 
 It intentionally uses the public yfinance feed, so run it while US equities are
 actively publishing quotes. Set RUN_E2E=1 to opt in.
@@ -20,6 +22,7 @@ from collections.abc import Callable
 import boto3
 import pytest
 from boto3.dynamodb.conditions import Key
+from tradebot.events.candidate import CandidateSnapshotEvent
 from tradebot.models.transport import MarketEventTransport
 
 pytestmark = [
@@ -172,12 +175,15 @@ def test_end_to_end() -> None:
     cloudformation = session.client("cloudformation")
     ecs = session.client("ecs")
     s3 = session.client("s3")
+    sns = session.client("sns")
     dynamodb = session.resource("dynamodb")
     cloudwatch = session.client("cloudwatch")
     outputs = get_stack_outputs(cloudformation, stack_name)
 
     required_outputs = {
         "ActiveCandidatesTableName",
+        "CandidatesTableName",
+        "CandidateTopicArn",
         "MarketDataBucketName",
         "MarketEventsTableName",
         "MarketDataWorkerClusterName",
@@ -195,6 +201,7 @@ def test_end_to_end() -> None:
 
     
     active_table = dynamodb.Table(outputs["ActiveCandidatesTableName"])
+    candidates_table = dynamodb.Table(outputs["CandidatesTableName"])
     events_table = dynamodb.Table(outputs["MarketEventsTableName"])
 
     sqs_queue_name = outputs["MarketEventWriterQueueName"]
@@ -205,7 +212,7 @@ def test_end_to_end() -> None:
     # check that the worker service is running, ensuring the pipeline is active
     service = outputs["MarketDataWorkerServiceName"]
     service_state = ecs.describe_services(cluster=cluster, services=[service])["services"][0]
-    original_desired_count = service_state["desiredCount"]
+    service_desired_count = service_state["desiredCount"]
     # S3 LastModified has coarser precision than datetime.now(). The small
     # overlap avoids missing an object written in the same wall-clock second.
     test_started_at = datetime.now(timezone.utc) - timedelta(seconds=2)
@@ -214,18 +221,66 @@ def test_end_to_end() -> None:
         Key=active_candidate_key,
         ConsistentRead=True,
     ).get("Item")
-
-    active_table.put_item(
-        Item={
-            **active_candidate_key,
-            "expires_at": int(time.time()) + timeout_seconds + 300,
-            "source": "pytest-market-data-e2e",
+    candidate_update_time = datetime.now(timezone.utc)
+    candidate_event = CandidateSnapshotEvent.from_candidate(
+        {
+            "symbol": symbol,
+            "update_time": candidate_update_time,
+            "scanner_tags": ["pytest-market-data-e2e"],
+            "price": "100.00",
+            "volume": "1000000",
+            "previous_close": "99.00",
+            "bid": "99.99",
+            "ask": "100.01",
+            "scanner_ts_ms": int(candidate_update_time.timestamp() * 1000),
         }
     )
 
     try:
-        if original_desired_count < 1:
+        if service_desired_count < 1:
             ecs.update_service(cluster=cluster, service=service, desiredCount=1)
+
+        sns.publish(
+            TopicArn=outputs["CandidateTopicArn"],
+            Message=candidate_event.model_dump_json(exclude_none=True),
+        )
+
+        # gets the relevant candidate from both the ActiveCandidates table and Candidates table
+        # ActiveCandidates table will hold the candidates that are "in play"
+        # ActiveCandidates is keyed by `{"universe_id": universe_id, "symbol": symbol}`
+        def get_ddb_candidates() -> dict[str, Any] | None:
+            active_candidate = active_table.get_item(
+                Key=active_candidate_key,
+                ConsistentRead=True,
+            ).get("Item")
+            history_candidate = candidates_table.get_item(
+                Key={
+                    "symbol": symbol,
+                    "update_time": candidate_update_time.isoformat(),
+                },
+                ConsistentRead=True,
+            ).get("Item")
+
+            if (
+                active_candidate is not None
+                and history_candidate is not None
+                and active_candidate.get("event_id") == candidate_event.event_id
+                and history_candidate.get("event_id") == candidate_event.event_id
+            ):
+                return {
+                    "active": active_candidate,
+                    "history": history_candidate,
+                }
+            return None
+
+        candidate_writer_results = _wait_until(
+            "CandidateWriter rows in CandidatesTable and ActiveCandidatesTable",
+            timeout_seconds,
+            get_ddb_candidates,
+        )
+
+        assert candidate_writer_results["active"]["symbol"] == symbol
+        assert candidate_writer_results["history"]["symbol"] == symbol
 
         payload, s3_uri = _wait_until(
             f"a {symbol} market.quote.v1 JSONL record in S3",
@@ -304,13 +359,19 @@ def test_end_to_end() -> None:
 
         assert payload["schema_version"] == "1.0.0"
     finally:
+        candidates_table.delete_item(
+            Key={
+                "symbol": symbol,
+                "update_time": candidate_update_time.isoformat(),
+            }
+        )
         if previous_candidate is None:
             active_table.delete_item(Key=active_candidate_key)
         else:
             active_table.put_item(Item=previous_candidate)
-        if original_desired_count < 1:
+        if service_desired_count < 1:
             ecs.update_service(
                 cluster=cluster,
                 service=service,
-                desiredCount=original_desired_count,
+                desiredCount=service_desired_count,
             )

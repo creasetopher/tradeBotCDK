@@ -1,6 +1,7 @@
 """Infrastructure definition for the trade bot application."""
 
 import os
+from pathlib import Path
 
 from aws_cdk import (
     BundlingOptions,
@@ -33,10 +34,10 @@ class TradeBotCdkStack(Stack):
     """Infrastructure for the trade bot research/data platform.
 
     This version separates:
-      - candidate discovery: scheduled Lambda -> SNS -> SQS -> DynamoDB
-      - market data ingestion: long-running ECS/Fargate worker -> selected transport
-      - historical storage: transport -> Lambda -> S3 raw archive + DynamoDB hot/recent state
-      - controls: SSM parameters for kill switch / trading enablement
+    - candidate discovery: scheduled Lambda -> SNS -> SQS -> DynamoDB
+    - market data ingestion: long-running ECS/Fargate worker -> selected transport
+    - historical storage: transport -> Lambda -> S3 raw archive + DynamoDB hot/recent state
+    - controls: SSM parameters for kill switch / trading enablement
     """
 
     def __init__(
@@ -147,6 +148,20 @@ class TradeBotCdkStack(Stack):
             removal_policy=RemovalPolicy.RETAIN,
         )
 
+        orders_table: dynamodb.Table = dynamodb.Table(
+            self,
+            "OrdersTable",
+            table_name=f"{prefix}-orders",
+            partition_key=dynamodb.Attribute(
+                name="client_order_id",
+                type=dynamodb.AttributeType.STRING,
+            ),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            point_in_time_recovery=True,
+            removal_policy=RemovalPolicy.RETAIN,
+        )
+
+
         # Candidate discovery fan-out: scanner Lambda publishes candidate snapshots to SNS.
         candidate_topic = sns.Topic(
             self,
@@ -197,6 +212,27 @@ class TradeBotCdkStack(Stack):
             enforce_ssl=True,
             retention_period=Duration.days(14),
         )
+
+        order_execution_dlq: sqs.Queue = sqs.Queue(
+            self,
+            "OrderExecutionDlq",
+            queue_name=f"{prefix}-order-execution-dlq",
+            enforce_ssl=True,
+            retention_period=Duration.days(14),
+        )
+
+        order_execution_queue: sqs.Queue = sqs.Queue(
+            self,
+            "OrderExecutionQueue",
+            queue_name=f"{prefix}-order-execution",
+            enforce_ssl=True,
+            visibility_timeout=Duration.minutes(3),
+            dead_letter_queue=sqs.DeadLetterQueue(
+                queue=order_execution_dlq,
+                max_receive_count=1,
+            ),
+        )
+
 
         scanner_function = _lambda.Function(
             self,
@@ -251,6 +287,54 @@ class TradeBotCdkStack(Stack):
                 report_batch_item_failures=True,
             )
         )
+
+        order_execution_function = _lambda.Function(
+            self,
+            "OrderExecutionFunction",
+            function_name=f"{prefix}-order-execution",
+            runtime=_lambda.Runtime.PYTHON_3_12,
+            architecture=_lambda.Architecture.ARM_64,
+            handler="order_execution_service.handler.handler",
+            code=_lambda.Code.from_asset(
+                str(Path(__file__).parent.parent / "order_execution_service"),
+                bundling=BundlingOptions(
+                    image=_lambda.Runtime.PYTHON_3_12.bundling_image,
+                    environment={
+                        "GITHUB_USER": os.environ["GITHUB_USER"],
+                        "GITHUB_TOKEN": os.environ["GITHUB_TOKEN"],
+                    },
+                    user="root",
+                    command=[
+                        "bash",
+                        "-c",
+                        "dnf install -y git && "
+                        "python -m pip install "
+                        "-r requirements.txt "
+                        "-t /asset-output && "
+                        "mkdir -p /asset-output/order_execution_service && "
+                        "cp -au *.py /asset-output/order_execution_service",
+                    ]
+                )
+            ),
+            memory_size=512,
+            timeout=Duration.seconds(60),
+            log_retention=logs.RetentionDays.ONE_MONTH,
+            environment={
+                "ORDERS_TABLE_NAME": orders_table.table_name,
+                "STAGE": stage,
+                "ORDER_BROKER_MODE": "log",
+            }
+        )
+        orders_table.grant_write_data(order_execution_function)
+
+        order_execution_function.add_event_source(
+            lambda_event_sources.SqsEventSource(
+                order_execution_queue,
+                batch_size=1,
+                report_batch_item_failures=True,
+            )
+        )
+
 
         market_event_stream: kinesis.Stream | None = None
         market_event_topic: sns.Topic | None = None
@@ -470,7 +554,13 @@ class TradeBotCdkStack(Stack):
 
         task_definition.add_container(
             "MarketDataWorkerContainer",
-            image=ecs.ContainerImage.from_asset("src/market_data_worker"),
+            image=ecs.ContainerImage.from_asset(
+                "src/market_data_worker", 
+                build_args={
+                    "GITHUB_USER": os.environ["GITHUB_USER"],
+                    "GITHUB_TOKEN": os.environ["GITHUB_TOKEN"]
+                }
+            ),
             logging=ecs.LogDrivers.aws_logs(
                 stream_prefix=f"{prefix}-market-data-worker",
                 log_retention=logs.RetentionDays.ONE_MONTH,
@@ -536,12 +626,30 @@ class TradeBotCdkStack(Stack):
             "ActiveCandidatesTableName",
             value=active_candidates_table.table_name,
         )
+        CfnOutput(
+            self,
+            "OrdersTableName",
+            value=orders_table.table_name,
+        )
+
         if market_event_writer_queue is not None:
             CfnOutput(
                 self,
                 "MarketEventWriterQueueName",
                 value=market_event_writer_queue.queue_name,
             )
+        CfnOutput(
+            self,
+            "OrderExecutionQueueUrl",
+            value=order_execution_queue.queue_url,
+        )
+
+        CfnOutput(
+            self,
+            "OrderBrokerMode",
+            value="log",
+        )
+
 
 
     @staticmethod
@@ -554,12 +662,12 @@ class TradeBotCdkStack(Stack):
                     "GITHUB_USER": os.environ["GITHUB_USER"],
                     "GITHUB_TOKEN": os.environ["GITHUB_TOKEN"],
                 },
-
+                user="root",
                 command=[
                     "bash",
                     "-c",
                     "if [ -f requirements.txt ]; then "
-                    "python -m pip install -r requirements.txt -t /asset-output; "
+                    "dnf install -y git && python -m pip install -r requirements.txt -t /asset-output; "
                     "fi && cp -au . /asset-output",
                 ],
             ),

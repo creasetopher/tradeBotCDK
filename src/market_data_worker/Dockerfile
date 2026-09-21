@@ -1,6 +1,13 @@
 # Market-data worker runtime image
 FROM public.ecr.aws/docker/library/python:3.12-slim
 
+ARG GITHUB_USER
+ARG GITHUB_TOKEN
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
+
 ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
