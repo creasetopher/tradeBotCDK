@@ -51,8 +51,8 @@ def test_log_transport_publishes_event_without_aws(caplog) -> None:
 
 
 @pytest.mark.parametrize("transport", ["sqs", "firehose", "unknown"])
-# tests that the factory raises a ValueError with a message indicating the unsupported transport when an unsupported transport is provided
 def test_factory_rejects_unsupported_transport(transport: str) -> None:
+	"""Check that an unsupported transport raises a descriptive ValueError."""
 	with pytest.raises(
 		ValueError,
 		match=f"Unsupported MARKET_EVENT_TRANSPORT: {transport}",

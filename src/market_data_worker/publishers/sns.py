@@ -9,24 +9,25 @@ from tradebot.events.market import MarketQuoteEvent
 
 
 class SnsMarketEventPublisher:
-    """Publish market quote events to an Amazon SNS topic."""
+	"""Publish market quote events to an Amazon SNS topic."""
 
-    def __init__(self, topic_arn: str, client: Any | None = None) -> None:
-        if not topic_arn:
-            raise ValueError("topic_arn is required")
+	def __init__(self, topic_arn: str, client: Any | None = None) -> None:
+		"""Set the target topic and use the supplied client or create an SNS client."""
+		if not topic_arn:
+			raise ValueError("topic_arn is required")
 
-        self._topic_arn = topic_arn
-        self._client = client or boto3.client("sns")
+		self._topic_arn = topic_arn
+		self._client = client or boto3.client("sns")
 
-    def publish(self, event: MarketQuoteEvent) -> None:
-        """Serialize and publish an event with its type as message metadata."""
-        self._client.publish(
-            TopicArn=self._topic_arn,
-            Message=event.model_dump_json(exclude_none=True),
-            MessageAttributes={
-                "event_type": {
-                    "DataType": "String",
-                    "StringValue": event.event_type,
-                }
-            },
-        )
+	def publish(self, event: MarketQuoteEvent) -> None:
+		"""Serialize and publish an event with its type as message metadata."""
+		self._client.publish(
+			TopicArn=self._topic_arn,
+			Message=event.model_dump_json(exclude_none=True),
+			MessageAttributes={
+				"event_type": {
+					"DataType": "String",
+					"StringValue": event.event_type,
+				}
+			},
+		)

@@ -6,8 +6,8 @@ from .log import LoggingMarketEventPublisher
 from .sns import SnsMarketEventPublisher
 
 __all__ = [
-    "KinesisMarketEventPublisher",
-    "LoggingMarketEventPublisher",
-    "MarketEventPublisher",
-    "SnsMarketEventPublisher",
+	"KinesisMarketEventPublisher",
+	"LoggingMarketEventPublisher",
+	"MarketEventPublisher",
+	"SnsMarketEventPublisher",
 ]

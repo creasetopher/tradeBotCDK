@@ -122,9 +122,8 @@ def test_order_failure_persistence_error_propagates() -> None:
 	mock_ddb_client.save_order_result.assert_not_called()
 
 
-# test that the service rejects orders with quantity above the maximum allowed quantity
-# and respects the max_order_quantity parameter passed to the service
 def test_rejects_quantity_above_maximum() -> None:
+	"""Check that the service rejects quantities above its configured maximum."""
 	broker = Mock(spec=OrderBroker)
 	order = build_order_request("101")
 	mock_ddb_client = Mock(spec=OrderDynamoDbClient)

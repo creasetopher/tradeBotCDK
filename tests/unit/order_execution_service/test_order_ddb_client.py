@@ -86,8 +86,8 @@ def test_saves_order_failure(mocked_order_table) -> None:
 	assert recorded_at.utcoffset() == timedelta(0)
 
 
-# test that saving an order result with the same client_order_id replaces the existing record in DynamoDB
 def test_replaces_result_with_same_client_order_id(mocked_order_table) -> None:
+	"""Check that saving the same client order ID replaces its previous result."""
 	client = OrderDynamoDbClient(
 		mocked_order_table.name,
 	)
