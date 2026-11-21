@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tradebotCDK"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+  "aws-cdk-lib>=2.255.0,<3.0.0",
+  "constructs>=10.5.0,<11.0.0",
+  "cdk-dynamo-table-view==0.2.488",
+  "boto3>=1.43.14",
+  "tradebot2 @ git+https://${GITHUB_USER}:${GITHUB_TOKEN}@github.com/creasetopher/tradebotApp.git"
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+ignore = ["W191", "E101", "E501"]
+
+[tool.ruff.format]
+quote-style = "preserve"
+indent-style = "tab"
+
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "src"
+check_untyped_defs = true
+warn_unused_ignores = true
